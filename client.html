@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CB Radio Online</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; background:radial-gradient(circle at top,#303030,#050505); font-family:Arial,sans-serif; color:#f5f5f5; }
+    .radio { width:440px; background:linear-gradient(145deg,#1c1c1c,#080808); border:4px solid #333; border-radius:24px; padding:24px; box-shadow:0 25px 60px rgba(0,0,0,.65), inset 0 0 20px rgba(255,255,255,.04); }
+    .top { display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; }
+    .brand { font-weight:800; letter-spacing:2px; color:#ddd; }
+    .led { width:14px; height:14px; border-radius:50%; background:#444; }
+    .led.on { background:#00ff66; box-shadow:0 0 16px #00ff66; }
+    .display { background:#101d14; border:3px inset #333; border-radius:14px; padding:18px; margin-bottom:18px; color:#7cff9b; text-shadow:0 0 10px rgba(124,255,155,.8); font-family:"Courier New",monospace; }
+    .display-row { display:flex; justify-content:space-between; align-items:end; }
+    .channel-label { font-size:13px; opacity:.8; }
+    .channel { font-size:58px; font-weight:bold; line-height:1; }
+    .status { margin-top:10px; font-size:14px; min-height:18px; }
+    .panel { display:grid; gap:10px; margin-bottom:14px; }
+    input,button,select { border:none; border-radius:14px; padding:13px; font-size:15px; font-weight:700; }
+    input,select { background:#111; color:#7cff9b; border:1px solid #444; }
+    button { cursor:pointer; background:#2f2f2f; color:white; box-shadow:inset 0 -4px 0 rgba(0,0,0,.35); }
+    button:active { transform:translateY(2px); box-shadow:inset 0 -2px 0 rgba(0,0,0,.35); }
+    .controls { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px; }
+    .ptt { width:100%; padding:24px; background:linear-gradient(#c1121f,#780000); font-size:22px; letter-spacing:1px; border-radius:18px; }
+    .ptt.talking { background:linear-gradient(#ff3c3c,#b30000); box-shadow:0 0 25px rgba(255,0,0,.65), inset 0 -4px 0 rgba(0,0,0,.35); }
+    .meter { height:16px; background:#050505; border-radius:999px; overflow:hidden; margin:18px 0; border:1px solid #333; }
+    .bar { width:0%; height:100%; background:linear-gradient(90deg,#42ff70,#fff200,#ff3030); transition:width .08s; }
+    .hint { color:#aaa; font-size:13px; line-height:1.4; text-align:center; }
+  </style>
+</head>
+<body>
+  <main class="radio">
+    <div class="top"><div class="brand">TRUCKER CB ONLINE</div><div id="led" class="led"></div></div>
+    <section class="display">
+      <div class="display-row">
+        <div><div class="channel-label">KANAŁ</div><div id="channelNumber" class="channel">19</div></div>
+        <div style="text-align:right"><div class="channel-label">STATUS</div><div id="connectionText">OFF</div></div>
+      </div>
+      <div id="status" class="status">Kliknij POŁĄCZ.</div>
+    </section>
+    <div class="panel">
+      <input id="serverInput" placeholder="Adres serwera WebSocket" />
+      <input id="nickInput" value="Kierowca" placeholder="Twój nick" />
+      <button onclick="connectRadio()">POŁĄCZ</button>
+    </div>
+    <div class="controls">
+      <button onclick="changeChannel(-1)">− KANAŁ</button>
+      <button onclick="changeChannel(1)">+ KANAŁ</button>
+      <select id="channelSelect" onchange="setChannel(this.value)">
+        <option value="1">Kanał 1</option><option value="9">Kanał 9</option><option value="19" selected>Kanał 19</option><option value="28">Kanał 28</option><option value="40">Kanał 40</option>
+      </select>
+      <button onclick="sendPing()">TEST</button>
+    </div>
+    <div class="meter"><div id="bar" class="bar"></div></div>
+    <button id="ptt" class="ptt">NADAWAJ</button>
+    <p class="hint">Działa przez publiczny serwer. Obaj wchodzicie w ten sam link i wybieracie ten sam kanał.</p>
+  </main>
+  <script>
+    let ws, channel=19, mediaRecorder, stream, audioContext, analyser, dataArray, animationId, isTalking=false;
+    const ptt=document.getElementById('ptt'), led=document.getElementById('led'), status=document.getElementById('status'), bar=document.getElementById('bar'), channelNumber=document.getElementById('channelNumber'), channelSelect=document.getElementById('channelSelect'), connectionText=document.getElementById('connectionText'), serverInput=document.getElementById('serverInput');
+
+    function defaultWsUrl(){
+      if(location.protocol === 'https:') return 'wss://' + location.host;
+      if(location.protocol === 'http:') return 'ws://' + location.host;
+      return 'ws://localhost:3000';
+    }
+    serverInput.value = defaultWsUrl();
+
+    function setChannel(value){ channel=Math.max(1,Math.min(40,Number(value))); channelNumber.textContent=String(channel).padStart(2,'0'); channelSelect.value=String(channel); status.textContent=`Ustawiono kanał ${channel}.`; sendJson({type:'join',channel,nick:nickInput.value||'Kierowca'}); }
+    function changeChannel(step){ setChannel(channel+step); }
+    function connectRadio(){
+      const url=serverInput.value.trim();
+      ws=new WebSocket(url); ws.binaryType='arraybuffer';
+      ws.onopen=()=>{ connectionText.textContent='ON'; status.textContent=`Połączono. Kanał ${channel}.`; led.classList.add('on'); sendJson({type:'join',channel,nick:nickInput.value||'Kierowca'}); setTimeout(()=>led.classList.remove('on'),400); };
+      ws.onclose=()=>{ connectionText.textContent='OFF'; status.textContent='Rozłączono z serwerem.'; };
+      ws.onerror=()=>{ status.textContent='Błąd połączenia. Sprawdź adres serwera.'; };
+      ws.onmessage=(event)=>{ if(typeof event.data==='string'){ try{ const msg=JSON.parse(event.data); if(msg.type==='info') status.textContent=msg.text; }catch{} return; } playAudioChunk(event.data); };
+    }
+    function sendJson(obj){ if(ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
+    function sendPing(){ sendJson({type:'ping',channel,nick:nickInput.value||'Kierowca'}); status.textContent='Wysłano test na kanał.'; }
+    async function prepareMic(){ if(stream) return; stream=await navigator.mediaDevices.getUserMedia({audio:true}); audioContext=new (window.AudioContext||window.webkitAudioContext)(); analyser=audioContext.createAnalyser(); const microphone=audioContext.createMediaStreamSource(stream); analyser.fftSize=256; microphone.connect(analyser); dataArray=new Uint8Array(analyser.frequencyBinCount); }
+    function drawMeter(){ if(!analyser) return; analyser.getByteFrequencyData(dataArray); const avg=dataArray.reduce((a,b)=>a+b,0)/dataArray.length; bar.style.width=Math.min(100,avg*1.5)+'%'; animationId=requestAnimationFrame(drawMeter); }
+    async function startTalking(){
+      if(!ws || ws.readyState!==WebSocket.OPEN){ status.textContent='Najpierw kliknij POŁĄCZ.'; return; }
+      try{
+        await prepareMic(); isTalking=true; led.classList.add('on'); ptt.classList.add('talking'); status.textContent=`Nadajesz na kanale ${channel}...`; drawMeter();
+        mediaRecorder=new MediaRecorder(stream,{mimeType:'audio/webm'});
+        mediaRecorder.ondataavailable=async(e)=>{ if(e.data.size>0 && ws.readyState===WebSocket.OPEN){ sendJson({type:'audioHeader',channel,nick:nickInput.value||'Kierowca'}); ws.send(await e.data.arrayBuffer()); } };
+        mediaRecorder.start(250);
+      }catch(err){ status.textContent='Brak dostępu do mikrofonu. Zezwól w przeglądarce.'; }
+    }
+    function stopTalking(){ if(!isTalking) return; isTalking=false; led.classList.remove('on'); ptt.classList.remove('talking'); status.textContent=`Odbiór na kanale ${channel}.`; bar.style.width='0%'; cancelAnimationFrame(animationId); if(mediaRecorder && mediaRecorder.state!=='inactive') mediaRecorder.stop(); }
+    function playAudioChunk(arrayBuffer){ const blob=new Blob([arrayBuffer],{type:'audio/webm'}); const url=URL.createObjectURL(blob); const audio=new Audio(url); audio.play().catch(()=>{}); audio.onended=()=>URL.revokeObjectURL(url); }
+    ptt.addEventListener('mousedown',startTalking); ptt.addEventListener('mouseup',stopTalking); ptt.addEventListener('mouseleave',stopTalking); ptt.addEventListener('touchstart',e=>{e.preventDefault();startTalking();}); ptt.addEventListener('touchend',stopTalking);
+    setChannel(19);
+  </script>
+</body>
+</html>
